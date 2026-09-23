@@ -161,7 +161,7 @@ When a serverless function throws a permission-like error, check the exact excep
 **Verification Notes:**
 - **AWS**: Fully verified end-to-end (S3 → Lambda → DynamoDB)
 - **GCP**: Fully verified end-to-end (Cloud Storage → Cloud Functions → Firestore)
-- **Azure**: Implementation complete (code + bindings), but trigger invocation unverified due to Consumption plan + regional limitations (see Lessons Learned #5(https://github.com/ankurkohli007/Multi-Cloud-Serverless-Image-Processing-Pipeline-AWS-Azure-GCP#5-azure-trigger-reliability-on-consumption-plan))
+- **Azure**: Implementation complete (code + bindings), but trigger invocation unverified due to Consumption plan + regional limitations (see Lessons Learned [#5](https://github.com/ankurkohli007/Multi-Cloud-Serverless-Image-Processing-Pipeline-AWS-Azure-GCP#5-azure-trigger-reliability-on-consumption-plan))
 
 ---
 
