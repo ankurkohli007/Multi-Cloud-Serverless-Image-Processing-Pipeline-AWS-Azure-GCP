@@ -38,8 +38,7 @@ Implement the same event-driven architecture across AWS, Azure, and GCP to demon
                                                                 └──────────────┘
 ```
 
-**Current Status:** Steps 1–3 complete (Storage + Event-Driven Compute + NoSQL Database) — AWS and GCP fully verified end-to-end; Azure implementation complete but trigger invocation unverified due to platform limitations (see Lessons Learned)  
-**Planned:** Step 4 (API Layer)
+**Current Status:** Steps 1–4 complete (Storage, Event-Driven Compute, NoSQL Database, API Layer) — AWS fully verified end-to-end including both a Lambda Function URL and a full API Gateway (HTTP API) route; GCP fully verified via HTTP-triggered Cloud Function; Azure API layer implemented (HTTP-triggered Function with Cosmos DB input binding, correct binding/connection/host.json configuration confirmed) but returns a runtime 500 error with no diagnosable exception surfaced through standard logging tools — documented as an unresolved platform/tooling limitation, consistent with Azure trigger issues from Step 2-3
 
 ---
 
@@ -54,7 +53,8 @@ Implement the same event-driven architecture across AWS, Azure, and GCP to demon
 | **Record unit** | Item | Item | Document |
 | **Grouping unit** | Table | Container | Collection |
 | **Primary key** | Partition key | Partition key (path-based, e.g. /imageId) | Document ID |
-| **API Layer** | API Gateway + Lambda | API Management + Functions | Cloud Run / Cloud Endpoints |
+| **API Layer** | Lambda Function URL + API Gateway (HTTP API) | HTTP-triggered Function (APIM not built — documented conceptually) | HTTP-triggered Cloud Function |
+| **Read pattern** | `table.scan()` | Cosmos DB input binding, SQL API (`SELECT * FROM c`) | `collection.stream()` |
 
 ---
 
@@ -78,6 +78,21 @@ Azure classic and Event Grid Blob triggers both failed to invoke reliably in thi
 
 ### 6. IAM Debugging Pattern: Exception Types Matter
 When a serverless function throws a permission-like error, check the exact exception type in logs before assuming it's IAM — in this case a `"NotFound: database does not exist"` error looked permission-related but was actually a configuration mismatch (wrong database name), not an access issue.
+
+### 7. DynamoDB Decimal Serialization
+DynamoDB stores all numbers as Python `Decimal` internally; `json.dumps()` cannot serialize `Decimal` by default, requiring a custom `JSONEncoder` subclass to convert `Decimal` to `int`/`float` before returning API responses.
+
+### 8. Lambda Function URLs vs. API Gateway
+AWS Lambda Function URLs vs. API Gateway: Function URLs give a single function its own HTTPS endpoint with zero extra config; API Gateway adds multi-route support, staging, throttling, and custom domains — the right tool depends on whether the API needs one endpoint or several.
+
+### 9. GCP Cloud Functions Entry Point Naming
+GCP Cloud Functions require the "Function entry point" field to exactly match the Python function name decorated with `@functions_framework.http` (or `.cloud_event`); a mismatch causes a container startup failure (`PORT=8080` health check timeout) that looks like a deployment/infra problem but is actually a simple naming mismatch.
+
+### 10. Azure Functions Content Share Settings
+Azure Windows Consumption plan Function Apps store deployed code externally in an Azure Files share, referenced by the `WEBSITE_CONTENTSHARE` and `WEBSITE_CONTENTAZUREFILECONNECTIONSTRING` app settings; adding these settings with a new/empty share value causes all functions to disappear from the portal (though they still exist), since the app now points at an empty content location — removing the settings and restarting the app restores them.
+
+### 11. Azure Windows Consumption Plan Reliability
+Across this project, Azure's Windows Consumption plan showed meaningfully more reliability and diagnosability issues than AWS Lambda or GCP Cloud Functions for equivalent tasks (Blob trigger invocation, HTTP-triggered function with a database input binding) — a real factor to weigh when choosing a hosting plan and OS for Azure Functions in production.
 
 ---
 
@@ -137,12 +152,18 @@ When a serverless function throws a permission-like error, check the exact excep
 ```
 .
 ├── aws-lambda/
-│   └── handler.py           # AWS Lambda handler (Python)
+│   ├── handler.py           # AWS Lambda handler (Python) — Step 2-3
+│   └── list_images_handler.py  # AWS API Layer handler (Python) — Step 4
 ├── azure-function/
-│   └── index.js             # Azure Function handler (Node.js)
+│   ├── index.js             # Azure Function handler (Node.js) — Step 2-3
+│   └── ImageListApi/
+│       └── index.js         # Azure API Layer HTTP Function (Node.js) — Step 4
 ├── gcp-function/
-│   ├── main.py              # GCP Cloud Function handler (Python)
-│   └── requirements.txt     # Python dependencies
+│   ├── main.py              # GCP Cloud Function handler (Python) — Step 2-3
+│   ├── requirements.txt     # Python dependencies — Step 2-3
+│   └── image-list-api/
+│       ├── main.py          # GCP API Layer HTTP Cloud Function (Python) — Step 4
+│       └── requirements.txt # Python dependencies — Step 4
 ├── .gitignore               # Git ignore rules
 └── README.md                # This file
 ```
@@ -156,12 +177,12 @@ When a serverless function throws a permission-like error, check the exact excep
 | 1 | Object Storage Setup | ✅ Complete |
 | 2 | Event-Driven Compute (Storage → Function) | ✅ Complete |
 | 3 | NoSQL Database Integration | ✅ Complete |
-| 4 | API Layer for Metadata Access | 📋 Planned |
+| 4 | API Layer for Metadata Access | ✅ Complete |
 
 **Verification Notes:**
-- **AWS**: Fully verified end-to-end (S3 → Lambda → DynamoDB)
-- **GCP**: Fully verified end-to-end (Cloud Storage → Cloud Functions → Firestore)
-- **Azure**: Implementation complete (code + bindings), but trigger invocation unverified due to Consumption plan + regional limitations (see Lessons Learned [#5](https://github.com/ankurkohli007/Multi-Cloud-Serverless-Image-Processing-Pipeline-AWS-Azure-GCP#5-azure-trigger-reliability-on-consumption-plan))
+- **AWS**: Fully verified end-to-end including both a Lambda Function URL and a full API Gateway (HTTP API) route (S3 → Lambda → DynamoDB → API)
+- **GCP**: Fully verified end-to-end via HTTP-triggered Cloud Function (Cloud Storage → Cloud Functions → Firestore → HTTP Function)
+- **Azure**: API layer implemented (HTTP-triggered Function with Cosmos DB input binding, correct binding/connection/host.json configuration confirmed) but returns a runtime 500 error with no diagnosable exception surfaced through standard logging tools — documented as an unresolved platform/tooling limitation, consistent with Azure trigger issues from Step 2-3
 
 ---
 
@@ -169,7 +190,7 @@ When a serverless function throws a permission-like error, check the exact excep
 
 - [x] Add DynamoDB / Cosmos DB / Firestore integration to each function
 - [x] Implement metadata schema (file name, size, upload time, processing status)
-- [ ] Build REST API layer to query metadata
+- [x] Build REST API layer to query metadata
 - [ ] Add authentication/authorization to API
 - [ ] Create infrastructure-as-code (Terraform/CDK/Bicep) for reproducible deployments
 
