@@ -235,17 +235,4 @@ Client
 
 ---
 
-## Interview Talking Points
-
-- **Push vs. poll triggers:** S3 Event Notifications and Eventarc are push (instant, reliable); Azure classic blob trigger is polling (delayed, unreliable on Consumption).
-- **Roles instead of hard-coded keys:** AWS IAM roles, GCP service accounts with IAM, Azure Managed Identity — least privilege, no secrets in code.
-- **Cold starts and timeouts:** Lambda 3s → 30s for AI; GCP Cloud Run Functions cold start ~1–2s; Azure Consumption cold starts can exceed 10s.
-- **NoSQL vs. SQL, scan vs. query:** DynamoDB/Cosmos/Firestore are partition-key stores; `scan`/`stream` is O(N) — use GSIs, composite indexes, or partition keys for O(1) lookups.
-- **Function URL vs. API Gateway:** Function URL = simple, no auth, no throttling, no custom domain; API Gateway = full lifecycle (auth, throttling, stages, custom domains, WAF).
-- **Managed AI vs. building models:** Rekognition / Vision API / Cloud Vision give labels/moderation out of the box; false-positive/false-negative thresholds are product decisions, not ML problems.
-- **Cross-region service calls & data residency:** Rekognition in `eu-west-1` while bucket in `eu-north-1` — bytes cross region boundary, but both EU; GCP Vision reads `gs://` in-region; Azure AI Vision endpoint is regional.
-- **The honest Azure trade-off:** Event-driven works reliably on AWS and GCP today; on Azure Consumption (Windows) the blob trigger is effectively request-driven. For production event-driven on Azure, use Linux/Premium + Event Grid or Event Hubs.
-
----
-
 *Built as a portfolio demonstration of cross-cloud serverless architecture and managed AI integration.*
