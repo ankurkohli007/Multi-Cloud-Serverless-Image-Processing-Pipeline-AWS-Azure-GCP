@@ -1,201 +1,251 @@
 # Multi-Cloud Serverless Image Processing Pipeline
 
-An event-driven serverless pipeline built across **AWS**, **Azure**, and **GCP** — demonstrating cross-cloud competency in building identical architectures on different cloud platforms.
+An event-driven, serverless image processing pipeline built across **AWS**, **Azure**, and **Google Cloud Platform**. Upload an image to object storage and it automatically triggers a serverless function that performs AI-powered image analysis (label detection, moderation/safe search), stores enriched metadata in a NoSQL database, and exposes a read API for clients. Built to demonstrate real cross-cloud serverless competency with managed AI services.
 
 ---
 
-## Problem Statement
+## Status
 
-Build a pipeline where uploading an image to object storage automatically triggers processing and metadata storage — with **zero server management**. The same event-driven architecture must work identically across all three major cloud providers.
-
----
-
-## Objective
-
-Implement the same event-driven architecture across AWS, Azure, and GCP to demonstrate cross-cloud serverless competency. Each cloud implementation follows the same pattern:
-
-1. User uploads an image to object storage
-2. Storage event triggers a serverless function
-3. Function logs/processes the upload
-4. Function writes metadata to a NoSQL database
-5. *(Planned)* API layer serves metadata to frontend
+| Stage | AWS | Azure | GCP |
+|-------|-----|-------|-----|
+| 1. Object Storage | ✅ Verified | ✅ Verified | ✅ Verified |
+| 2. Event Trigger | ✅ Verified | ⚠️ Partial (blob trigger never invoked) | ✅ Verified |
+| 3. NoSQL Database Write | ✅ Verified | ⚠️ Partial (configured, unverified — trigger never fired) | ✅ Verified |
+| 4. Read API | ✅ Verified | ⚠️ Partial (HTTP function + Cosmos input binding returns 500, undiagnosed) | ✅ Verified |
+| 5. AI Image Analysis | ✅ Verified | ⚠️ Partial (on-demand HTTP call only, not trigger-driven, results not stored) | ✅ Verified |
 
 ---
 
-## Architecture Overview
+## Problem Statement & Objective
+
+**Problem:** Uploading an image should automatically trigger processing, AI analysis, and metadata storage — with no servers to manage.
+
+**Objective:** Build the same event-driven pipeline on AWS, Azure, and GCP to demonstrate real cross-cloud serverless and managed-AI competency.
+
+---
+
+## Architecture
 
 ```
-┌─────────────┐      ┌──────────────┐      ┌──────────────────┐      ┌──────────────┐      ┌───────────┐
-│   User      │────▶│  Object      │────▶│  Event Trigger   │────▶│  Serverless  │────▶│  NoSQL    │
-│  Uploads    │     │  Storage     │     │  (Push-based)    │     │  Function    │     │  Database  │
-│  Image      │     │              │     │                  │     │  (Process)   │     │  (Step 3)  │
-└─────────────┘     └──────────────┘     └──────────────────┘     └──────────────┘     └───────────┘
-                                                                       │
-                                                                       ▼
-                                                                ┌──────────────┐
-                                                                │   API Layer  │
-                                                                │  (Planned)   │
-                                                                └──────────────┘
+User
+  │
+  ▼
+Object Storage (S3 / Blob Storage / Cloud Storage)
+  │
+  ▼
+Event Trigger (S3 Event Notifications / Event Grid + Blob Trigger / Eventarc on Pub/Sub)
+  │
+  ▼
+Serverless Compute (Lambda / Azure Functions / Cloud Run Functions 2nd Gen)
+  │
+  ▼
+Managed AI Vision (Rekognition / Azure AI Vision / Cloud Vision API)
+  │
+  ▼
+NoSQL Database (DynamoDB / Cosmos DB for NoSQL / Firestore)
+  │
+  ▼
+HTTP API (Lambda Function URL + API Gateway / HTTP Function / HTTP Cloud Run Function)
+  │
+  ▼
+Client
 ```
 
-**Current Status:** Steps 1–4 complete (Storage, Event-Driven Compute, NoSQL Database, API Layer) — AWS fully verified end-to-end including both a Lambda Function URL and a full API Gateway (HTTP API) route; GCP fully verified via HTTP-triggered Cloud Function; Azure API layer implemented (HTTP-triggered Function with Cosmos DB input binding, correct binding/connection/host.json configuration confirmed) but returns a runtime 500 error with no diagnosable exception surfaced through standard logging tools — documented as an unresolved platform/tooling limitation, consistent with Azure trigger issues from Step 2-3
-
 ---
 
-## Cloud Service Comparison Table
-
-| Concept | AWS | Azure | GCP |
-|---------|-----|-------|-----|
-| **Storage** | S3 | Blob Storage | Cloud Storage |
-| **Compute** | Lambda | Azure Functions | Cloud Functions (Cloud Run) |
-| **Event Routing** | S3 Event Notification | Event Grid | Eventarc |
-| **NoSQL Database** | DynamoDB | Cosmos DB | Firestore |
-| **Record unit** | Item | Item | Document |
-| **Grouping unit** | Table | Container | Collection |
-| **Primary key** | Partition key | Partition key (path-based, e.g. /imageId) | Document ID |
-| **API Layer** | Lambda Function URL + API Gateway (HTTP API) | HTTP-triggered Function (APIM not built — documented conceptually) | HTTP-triggered Cloud Function |
-| **Read pattern** | `table.scan()` | Cosmos DB input binding, SQL API (`SELECT * FROM c`) | `collection.stream()` |
-
----
-
-## Lessons Learned / Debugging Notes
-
-### 1. Resources Are Region-Scoped
-Resources are region-scoped; mismatched regions between services cause **silent failures with no error message**. Always verify that storage, compute, and event routing services are deployed in the same region.
-
-### 2. Azure Blob Triggers: Classic vs. Event Grid
-- **Classic Blob triggers** poll storage on a schedule and can be unreliable on the Consumption plan.
-- **Event Grid** is the modern push-based alternative but has **regional availability gaps** (hit this firsthand in **Italy North** — Event Grid wasn't available there at the time).
-
-### 3. GCP Eventarc Requires Explicit IAM Grants
-Eventarc runs on Pub/Sub internally and requires explicit IAM role grants (e.g., **Pub/Sub Publisher**) to service accounts **before** triggers can be created. Missing these grants results in cryptic permission errors during trigger creation.
-
-### 4. GCP Firestore Custom Database Names
-GCP Firestore supports multiple named databases per project; the client SDK defaults to a database literally called `"(default)"` unless explicitly told otherwise via `firestore.Client(database="name")` — easy to miss if you gave your database a custom ID at creation.
-
-### 5. Azure Trigger Reliability on Consumption Plan
-Azure classic and Event Grid Blob triggers both failed to invoke reliably in this project (zero invocations recorded despite correct configuration, confirmed via Integration tab bindings and IAM/permissions checks) — documenting this as a known Consumption-plan + regional-availability limitation rather than a resolved implementation.
-
-### 6. IAM Debugging Pattern: Exception Types Matter
-When a serverless function throws a permission-like error, check the exact exception type in logs before assuming it's IAM — in this case a `"NotFound: database does not exist"` error looked permission-related but was actually a configuration mismatch (wrong database name), not an access issue.
-
-### 7. DynamoDB Decimal Serialization
-DynamoDB stores all numbers as Python `Decimal` internally; `json.dumps()` cannot serialize `Decimal` by default, requiring a custom `JSONEncoder` subclass to convert `Decimal` to `int`/`float` before returning API responses.
-
-### 8. Lambda Function URLs vs. API Gateway
-AWS Lambda Function URLs vs. API Gateway: Function URLs give a single function its own HTTPS endpoint with zero extra config; API Gateway adds multi-route support, staging, throttling, and custom domains — the right tool depends on whether the API needs one endpoint or several.
-
-### 9. GCP Cloud Functions Entry Point Naming
-GCP Cloud Functions require the "Function entry point" field to exactly match the Python function name decorated with `@functions_framework.http` (or `.cloud_event`); a mismatch causes a container startup failure (`PORT=8080` health check timeout) that looks like a deployment/infra problem but is actually a simple naming mismatch.
-
-### 10. Azure Functions Content Share Settings
-Azure Windows Consumption plan Function Apps store deployed code externally in an Azure Files share, referenced by the `WEBSITE_CONTENTSHARE` and `WEBSITE_CONTENTAZUREFILECONNECTIONSTRING` app settings; adding these settings with a new/empty share value causes all functions to disappear from the portal (though they still exist), since the app now points at an empty content location — removing the settings and restarting the app restores them.
-
-### 11. Azure Windows Consumption Plan Reliability
-Across this project, Azure's Windows Consumption plan showed meaningfully more reliability and diagnosability issues than AWS Lambda or GCP Cloud Functions for equivalent tasks (Blob trigger invocation, HTTP-triggered function with a database input binding) — a real factor to weigh when choosing a hosting plan and OS for Azure Functions in production.
-
----
-
-## Setup Notes (Console-Based Deployment)
-
-### AWS (Lambda + S3 + DynamoDB)
-1. Create an **S3 bucket** in your target region
-2. Create a **DynamoDB table** named `image-metadata` with partition key `imageId` (String)
-3. Create a **Lambda function** (Python 3.9+ runtime)
-   - Upload `aws-lambda/handler.py` as the function code
-   - Set handler to `handler.lambda_handler`
-   - Grant Lambda execution role `dynamodb:PutItem` on the `image-metadata` table
-4. Configure **S3 Event Notification**:
-   - Event type: `ObjectCreated:*`
-   - Destination: Lambda function ARN
-   - Grant S3 permission to invoke Lambda
-
-### Azure (Functions + Blob Storage + Event Grid + Cosmos DB)
-1. Create a **Storage Account** and **Blob Container**
-2. Create a **Cosmos DB account** (Core/SQL API), database, and container with partition key `/imageId`
-3. Create a **Function App** (Consumption plan, Node.js 18+)
-   - Deploy `azure-function/index.js`
-   - Set entry point to the exported async function
-   - Add Cosmos DB output binding (`outputDocument`) pointing to the container
-4. Create an **Event Grid System Topic** for the storage account
-5. Create an **Event Subscription**:
-   - Event type: `Microsoft.Storage.BlobCreated`
-   - Endpoint: Function App URL + function route
-   - *Note: Verify Event Grid is available in your region*
-
-### GCP (Cloud Functions + Cloud Storage + Eventarc + Firestore)
-1. Create a **Cloud Storage bucket** in your target region
-2. Create a **Firestore database** (Native mode) named `imagepipeline` (or your chosen name)
-3. Deploy the **Cloud Function** (2nd gen, Python 3.10+):
-   ```bash
-   gcloud functions deploy hello_gcs \
-       --gen2 \
-       --runtime=python310 \
-       --region=us-central1 \
-       --source=gcp-function \
-       --entry-point=hello_gcs \
-       --trigger-event-filters="type=google.cloud.storage.object.v1.finalized" \
-       --trigger-event-filters="bucket=YOUR_BUCKET_NAME"
-   ```
-4. **Critical:** Grant the Cloud Functions service account the `roles/pubsub.publisher` role:
-   ```bash
-   gcloud projects add-iam-policy-binding PROJECT_ID \
-       --member="serviceAccount:PROJECT_NUMBER@cloudbuild.gserviceaccount.com" \
-       --role="roles/pubsub.publisher"
-   ```
-5. Grant the Cloud Functions service account `roles/datastore.user` (or `roles/datastore.owner`) for Firestore write access.
-
----
-
-## Project Structure
+## Repository Structure
 
 ```
 .
 ├── aws-lambda/
-│   ├── handler.py           # AWS Lambda handler (Python) — Step 2-3
-│   └── list_images_handler.py  # AWS API Layer handler (Python) — Step 4
+│   ├── handler.py                 # S3-triggered Lambda: upload → AI analysis → DynamoDB
+│   └── list_images_handler.py     # GET /images API: scan DynamoDB → JSON
 ├── azure-function/
-│   ├── index.js             # Azure Function handler (Node.js) — Step 2-3
-│   └── ImageListApi/
-│       └── index.js         # Azure API Layer HTTP Function (Node.js) — Step 4
+│   ├── index.js                   # Blob-triggered function: upload → Cosmos DB output binding
+│   ├── ImageListApi/
+│   │   └── index.js               # HTTP function: Cosmos DB input binding → JSON
+│   └── AnalyzeImage/
+│       └── index.js               # On-demand HTTP: Azure AI Vision analysis
 ├── gcp-function/
-│   ├── main.py              # GCP Cloud Function handler (Python) — Step 2-3
-│   ├── requirements.txt     # Python dependencies — Step 2-3
-│   └── image-list-api/
-│       ├── main.py          # GCP API Layer HTTP Cloud Function (Python) — Step 4
-│       └── requirements.txt # Python dependencies — Step 4
-├── .gitignore               # Git ignore rules
-└── README.md                # This file
+│   ├── main.py                    # Eventarc-triggered: GCS finalize → Cloud Vision → Firestore
+│   ├── requirements.txt
+│   ├── image-list-api/
+│   │   ├── main.py                # HTTP Cloud Run function: Firestore stream → JSON
+│   │   └── requirements.txt
+└── README.md
 ```
 
 ---
 
-## Current Status
+## Service Mapping
 
-| Step | Description | Status |
-|------|-------------|--------|
-| 1 | Object Storage Setup | ✅ Complete |
-| 2 | Event-Driven Compute (Storage → Function) | ✅ Complete |
-| 3 | NoSQL Database Integration | ✅ Complete |
-| 4 | API Layer for Metadata Access | ✅ Complete |
-
-**Verification Notes:**
-- **AWS**: Fully verified end-to-end including both a Lambda Function URL and a full API Gateway (HTTP API) route (S3 → Lambda → DynamoDB → API)
-- **GCP**: Fully verified end-to-end via HTTP-triggered Cloud Function (Cloud Storage → Cloud Functions → Firestore → HTTP Function)
-- **Azure**: API layer implemented (HTTP-triggered Function with Cosmos DB input binding, correct binding/connection/host.json configuration confirmed) but returns a runtime 500 error with no diagnosable exception surfaced through standard logging tools — documented as an unresolved platform/tooling limitation, consistent with Azure trigger issues from Step 2-3
+| Layer | AWS | Azure | GCP |
+|-------|-----|-------|-----|
+| **Object Storage** | S3 (private, eu-north-1) | Storage Account + Container "images" (Italy North) | Cloud Storage (private, US multi-region) |
+| **Serverless Compute** | Lambda (Python 3.11) | Azure Functions (Node.js, Windows Consumption) | Cloud Run Functions 2nd Gen (Python) |
+| **Event Routing** | S3 Event Notifications (all object-create) | Event Grid (unsupported in Italy North) → Classic Blob Trigger `images/{name}` | Eventarc trigger on `google.cloud.storage.object.v1.finalized` |
+| **NoSQL Database** | DynamoDB `image-metadata` (PK: `imageId`, on-demand) | Cosmos DB for NoSQL (serverless) `ImagePipelineDB` / `ImageMetadata` (PK: `/imageId`) | Firestore Native mode, named DB `imagepipeline`, collection `image-metadata` |
+| **HTTP API** | Lambda Function URL + API Gateway HTTP API (`GET /images` on `$default`) | HTTP-triggered Function `ImageListApi` (Cosmos input binding) | HTTP Cloud Run Function `image-list-api` (unauthenticated) |
+| **AI Vision** | Rekognition (`detect_labels`, `detect_moderation_labels`) in eu-west-1 | Azure AI Vision (free tier) v3.2 `analyze` (Tags, Description, Adult) | Cloud Vision API `label_detection` + `safe_search_detection` |
+| **Permission Model** | IAM execution role (S3 read, DynamoDB write, Rekognition read) | Function app settings + connection strings + keys (VISION_ENDPOINT, VISION_KEY) | Default compute service account with Editor role; Pub/Sub Publisher for Eventarc |
 
 ---
 
-## Next Steps
+## Stage Walkthrough
 
-- [x] Add DynamoDB / Cosmos DB / Firestore integration to each function
-- [x] Implement metadata schema (file name, size, upload time, processing status)
-- [x] Build REST API layer to query metadata
-- [ ] Add authentication/authorization to API
-- [ ] Create infrastructure-as-code (Terraform/CDK/Bicep) for reproducible deployments
+### Stage 1 — Object Storage
+
+**Concept:** Private buckets/containers to receive image uploads. No public access.
+
+**What I built:**
+- **AWS:** Private S3 bucket in `eu-north-1` (Stockholm).
+- **Azure:** Storage account in Italy North with a blob container named `images`.
+- **GCP:** Private GCS bucket in US multi-region.
+
+**How the code evolved:** N/A — infrastructure-only stage.
+
+**Problems & fixes:**
+- Resources are region-scoped; mismatches fail silently (e.g., Rekognition unavailable in `eu-north-1`).
+- Azure requires a storage account before creating a container.
 
 ---
 
-## License
+### Stage 2 — Event-Driven Compute
 
-MIT License — feel free to use this as a reference for your own multi-cloud projects.
+**Concept:** An object upload triggers a serverless function automatically.
+
+**What I built:**
+- **AWS:** Lambda with S3 event notification (all object-create events). Execution role auto-created.
+- **Azure:** Function App on Windows Consumption plan (Node.js — Python requires Linux, not offered in free-trial create flow). Two trigger variants:
+  - Classic blob trigger on path `images/{name}`
+  - Event Grid blob trigger (for comparison)
+- **GCP:** Cloud Run Functions 2nd Gen with Eventarc trigger on the storage "object finalized" event.
+
+**How the code evolved:** Function initially only logged the event (`fileName`, `size`).
+
+**Problems & fixes:**
+- **AWS:** S3 trigger binds to one exact bucket ARN — wrong bucket = silent no-op.
+- **Azure:** Event Grid not supported in Italy North ("resource does not yet support events in this region"). Classic blob trigger showed 0 invocations (polling-based, unreliable on Consumption plan).
+- **GCP:** Eventarc API had to be enabled. Trigger creation failed with `storage.buckets.get` permission denied until the Cloud Storage service agent was granted **Pub/Sub Publisher** (Eventarc runs on Pub/Sub).
+
+---
+
+### Stage 3 — NoSQL Database Write
+
+**Concept:** The triggered function writes image metadata to a NoSQL database.
+
+**What I built:**
+- **AWS:** DynamoDB table `image-metadata` (partition key `imageId`, on-demand). Written via `boto3 put_item`. Role granted full DynamoDB access (learning scope; production should scope to `PutItem` on one table).
+- **Azure:** Cosmos DB for NoSQL (serverless). Database `ImagePipelineDB`, container `ImageMetadata`, partition key `/imageId`. Written through an output binding (`outputDocument`). Documents require a lowercase `id` field.
+- **GCP:** Firestore Native mode, named database `imagepipeline`. Collection `image-metadata` auto-created on first write.
+
+**How the code evolved:** From logging only → writing base metadata (`imageId`, `bucket`, `size`, `uploadTimestamp`).
+
+**Problems & fixes:**
+- **GCP:** Firestore client defaults to database `"(default)"`. Must use `firestore.Client(database="imagepipeline")` — surfaced as `NotFound` at write time, looked like a permission error.
+- **Azure:** Output binding "Collection Name" field defaulted to a placeholder; had to be set explicitly.
+
+---
+
+### Stage 4 — API Layer (Read Endpoint)
+
+**Concept:** Expose a `GET /images` (or equivalent) endpoint that returns all stored metadata.
+
+**What I built:**
+- **AWS:** Second Lambda (`list_images_handler.py`) with DynamoDB read-only role. Exposed first via **Function URL**, then via **API Gateway HTTP API** route `GET /images` on the `$default` stage (routes are explicit method+path; bare invoke URL returns Not Found).
+- **Azure:** HTTP-triggered function `ImageListApi` with a Cosmos DB input binding (`inputDocuments`, query `SELECT * FROM c`).
+- **GCP:** HTTP Cloud Run function `image-list-api`, unauthenticated, entry point `list_images`.
+
+**How the code evolved:** From scan/stream → JSON response with proper headers.
+
+**Problems & fixes:**
+- **AWS:** DynamoDB returns numbers as `Decimal`; `json.dumps` fails. Added custom `DecimalEncoder`.
+- **GCP:** Entry point left as `hello_http` caused container start failure (PORT=8080 health check) — only a naming mismatch.
+- **Azure:** Adding `WEBSITE_CONTENTSHARE` and `WEBSITE_CONTENTAZUREFILECONNECTIONSTRING` with new values made **all functions disappear** (code lives in an Azure Files share referenced by those settings). Removing the settings and restarting restored them.
+- **Azure:** `ImageListApi` returns 500 with no exception surfaced by standard logs — undiagnosed.
+
+---
+
+### Stage 5 — AI Image Analysis
+
+**Concept:** Enrich metadata with labels, moderation/safe-search, and a flagged indicator.
+
+**What I built:**
+- **AWS:** Rekognition `detect_labels` (MaxLabels=10, MinConfidence=70) + `detect_moderation_labels` (MinConfidence=60).
+  - Rekognition unavailable in `eu-north-1` → called in `eu-west-1` (Ireland), keeping EU data residency.
+  - S3 references cannot be used cross-region → image bytes sent directly (5 MB limit).
+  - Lambda timeout raised 3s → 30s, memory 128 MB → 256 MB.
+  - Role needs Rekognition read-only + S3 read (S3 trigger does **not** grant read access).
+  - Keys are URL-encoded → `unquote_plus` required.
+  - Confidence scores wrapped in `Decimal(str(...))` because DynamoDB rejects floats.
+  - `try/except` so failed analysis still saves base metadata with `aiError` field.
+- **GCP:** Cloud Vision API (enabled per project) with `label_detection` + `safe_search_detection`.
+  - Reads straight from `gs://` URI — no byte transfer needed.
+  - Default compute service account's Editor role was sufficient.
+  - Added `google-cloud-vision` to requirements.
+  - Moderation threshold: flag at `LIKELY` or `VERY_LIKELY`.
+- **Azure:** Azure AI Vision resource (free tier) with endpoint and key stored as app settings `VISION_ENDPOINT` and `VISION_KEY`.
+  - On-demand HTTP function `AnalyzeImage` using v3.2 `analyze` API (Tags, Description, Adult).
+  - Private blobs need a SAS URL, which must be URL-encoded when passed as a query parameter.
+  - Not integrated into the blob trigger pipeline; results not persisted.
+
+**Output comparison:**
+| Cloud | Labels | Moderation / Safe Search | Flagging |
+|-------|--------|--------------------------|----------|
+| AWS | Category + confidence % | Moderation labels (explicit categories) | Any moderation label → `isFlagged=true` |
+| Azure | Tags + natural-language caption | Adult/racy/gore scores 0–1 | `isAdultContent` or `isRacyContent` → `isFlagged=true` |
+| GCP | Description + confidence % (score × 100) | Likelihood levels: `VERY_UNLIKELY` … `VERY_LIKELY` | Any `LIKELY`/`VERY_LIKELY` → `isFlagged=true` |
+
+---
+
+## Portal-Configured Settings (No Secrets)
+
+| Cloud | Setting |
+|-------|---------|
+| **AWS Lambda** | Timeout: 30s, Memory: 256 MB. Policies: `AmazonS3ReadOnlyAccess`, `AmazonDynamoDBFullAccess` (learning), `AmazonRekognitionReadOnlyAccess`. |
+| **AWS API Gateway** | HTTP API, route `GET /images` on stage `$default`, integration = Lambda `list_images_handler`. |
+| **Azure Blob Trigger** | Path: `images/{name}` (classic trigger). |
+| **Azure Cosmos Output Binding** | Parameter: `outputDocument`, Database: `ImagePipelineDB`, Container: `ImageMetadata`, Partition Key: `/imageId`. |
+| **Azure Cosmos Input Binding** | Parameter: `inputDocuments`, Database: `ImagePipelineDB`, Container: `ImageMetadata`, Query: `SELECT * FROM c`. |
+| **Azure App Settings** | `VISION_ENDPOINT`, `VISION_KEY` (names only; values in portal). |
+| **GCP Eventarc Trigger** | Event type: `google.cloud.storage.object.v1.finalized`, Service: Cloud Run Function `hello_gcs`, Bucket: target GCS bucket. |
+| **GCP HTTP Function** | Unauthenticated, entry point: `list_images` (and `hello_gcs` for the trigger). |
+| **GCP IAM** | Default compute service account (`PROJECT_NUMBER-compute@developer.gserviceaccount.com`) granted **Editor** role (learning; production should scope to `datastore.documents.create`, `vision.images.annotate`, `pubsub.topics.publish`). |
+
+---
+
+## Known Limitations (Honest)
+
+- **Azure blob trigger never fired reliably** — classic trigger is polling-based and unreliable on Consumption plan; Event Grid unsupported in Italy North.
+- **Azure `ImageListApi` returns 500** — undiagnosed; no exception in standard logs.
+- **Azure AI step is on-demand only** — not integrated into the upload pipeline; results not stored.
+- **Public unauthenticated read endpoints** — no auth/throttling on any cloud.
+- **Broad IAM roles used for learning** — full DynamoDB, Editor on GCP, etc.
+- **`scan()` / `stream()` read entire tables** — no pagination, no indexes, no query optimization.
+
+---
+
+## What I Would Do Next
+
+1. **Azure:** Move to Linux or Premium hosting plan for reliable blob triggers (Event Grid + Linux, or Premium plan with VNet).
+2. **API layer:** Add API Management (Azure) / API Gateway authorizers + usage plans (AWS) / Cloud Endpoints (GCP) for auth and throttling.
+3. **Data access:** Replace scans with queries and GSIs (DynamoDB), composite indexes (Firestore), or proper partition strategies (Cosmos).
+4. **Security:** Least-privilege IAM roles; store secrets in Key Vault / Secrets Manager / Secret Manager.
+5. **Moderation:** Configurable confidence thresholds; human-review queue for borderline cases.
+
+---
+
+## Interview Talking Points
+
+- **Push vs. poll triggers:** S3 Event Notifications and Eventarc are push (instant, reliable); Azure classic blob trigger is polling (delayed, unreliable on Consumption).
+- **Roles instead of hard-coded keys:** AWS IAM roles, GCP service accounts with IAM, Azure Managed Identity — least privilege, no secrets in code.
+- **Cold starts and timeouts:** Lambda 3s → 30s for AI; GCP Cloud Run Functions cold start ~1–2s; Azure Consumption cold starts can exceed 10s.
+- **NoSQL vs. SQL, scan vs. query:** DynamoDB/Cosmos/Firestore are partition-key stores; `scan`/`stream` is O(N) — use GSIs, composite indexes, or partition keys for O(1) lookups.
+- **Function URL vs. API Gateway:** Function URL = simple, no auth, no throttling, no custom domain; API Gateway = full lifecycle (auth, throttling, stages, custom domains, WAF).
+- **Managed AI vs. building models:** Rekognition / Vision API / Cloud Vision give labels/moderation out of the box; false-positive/false-negative thresholds are product decisions, not ML problems.
+- **Cross-region service calls & data residency:** Rekognition in `eu-west-1` while bucket in `eu-north-1` — bytes cross region boundary, but both EU; GCP Vision reads `gs://` in-region; Azure AI Vision endpoint is regional.
+- **The honest Azure trade-off:** Event-driven works reliably on AWS and GCP today; on Azure Consumption (Windows) the blob trigger is effectively request-driven. For production event-driven on Azure, use Linux/Premium + Event Grid or Event Hubs.
+
+---
+
+*Built as a portfolio demonstration of cross-cloud serverless architecture and managed AI integration.*
