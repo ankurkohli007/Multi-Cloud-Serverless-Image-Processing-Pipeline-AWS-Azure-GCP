@@ -236,3 +236,28 @@ Client
 ---
 
 *Built as a portfolio demonstration of cross-cloud serverless architecture and managed AI integration.*
+
+## Stage 6: Generative AI Integration (additive)
+
+Stage 6 code lives in `stage6-generative-ai/`. Earlier files are unchanged.
+
+### What it adds
+A generative model turns the vision step's labels into an alt-text caption and hashtags. Only text labels are sent, not the image (cheaper, avoids image-size and region limits; the prompt says *use ONLY the given labels*, which grounds the output and reduces invented details). The generative call has its own try/except, so a model failure never discards the vision results (`genAiError` field). Moderation decisions stay with the vision service, not the language model.
+
+### Status table (Stage 6 only)
+
+| Cloud | Status |
+|-------|--------|
+| AWS   | BLOCKED (code complete; see Known Issue) |
+| Azure | Verified (on-demand HTTP function; caption returned in the response, not stored) |
+| GCP   | Verified (automatic on upload; stored in Firestore) |
+
+### Per-cloud notes
+- **GCP**: Vertex AI Gemini via the `google-genai` SDK with `vertexai=True`. The API was enabled with `gcloud services enable aiplatform.googleapis.com` because Vertex AI was renamed and no longer matched in the API Library search. The model ID is copied from the console because IDs change. The client is created inside the function so a configuration error cannot crash container startup.
+- **Azure**: A Foundry resource with a deployed small chat model, called by deployment name through the `/openai/v1/responses` route. App settings `AZ_OPENAI_ENDPOINT`, `AZ_OPENAI_KEY`, `AZ_OPENAI_DEPLOYMENT` hold the values (names only here). The code retries with a Bearer header on a 401. Lesson: endpoint, key and deployment must come from the same Foundry resource (the subscription had two), and a curl test of the key is the fastest way to separate a bad key from a bad function.
+
+### Known Issue: Amazon Bedrock blocked on AWS
+The Lambda calls Bedrock `converse` with the EU inference profile `eu.amazon.nova-lite-v1:0` from its own region. The call failed first with `AccessDeniedException` ("account is currently being verified") and later with `ValidationException` ("Operation not allowed"). The same error occurred in the Bedrock playground and for other models, and CloudShell also reported account verification in progress. The billing console showed a registered payment method and remaining credits. AWS Support replied that this is an account-level restriction they cannot change and suggested contacting an account manager. It is not yet determined whether it relates to account plan or service quotas. The code is retained and degrades gracefully: the record is still saved with the vision results plus a `genAiError` field. To retest once the restriction clears, upload a fresh image (existing records do not update).
+
+### Why integrate AI cloud services and generative AI
+AI cloud services (Rekognition, Cloud Vision, Azure AI Vision) are pre-trained APIs that turn unstructured data into structured data (labels, moderation flags, text), replacing manual review and tagging with no model training, pay-per-call. Generative models (Bedrock, Azure OpenAI, Vertex AI Gemini) write new content such as captions, summaries and answers. The cloud supplies what AI alone lacks: event triggers, scaling, identity and permissions, storage, APIs and monitoring. Good design runs the cheap predictable vision step first, grounds the generative step in its output, isolates each AI call so a failure never loses the base record, controls cost with small models and token caps, considers regions and inference profiles for data residency, and keeps safety decisions with the moderation service.
